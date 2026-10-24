@@ -1,0 +1,6 @@
+renders/*
+!renders/.gitkeep
+__pycache__/
+*.pyc
+.env
+*.key

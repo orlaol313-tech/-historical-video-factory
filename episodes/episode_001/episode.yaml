@@ -1,0 +1,11 @@
+id: episode_001
+title: Шарик
+format: {width: 1920, height: 1080, fps: 24, duration_sec: 60}
+characters: [bonnie, olly]   # берутся из characters/
+seed: 1
+audio: {music: synth, sfx: synth, voice: none}
+scenes:
+  - {id: s1, t: [0, 12],  bg: yard,  action: "Бонни и Оли встречаются во дворе"}
+  - {id: s2, t: [12, 27], bg: yard,  action: "Бонни находит красный шарик"}
+  - {id: s3, t: [27, 45], bg: park,  action: "Оли гонится за шариком, спотыкается"}
+  - {id: s4, t: [45, 60], bg: sky,   action: "Шарик улетает, друзья машут и смеются"}
