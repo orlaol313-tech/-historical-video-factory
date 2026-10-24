@@ -4,8 +4,8 @@ id: bonnie
 role: главная героиня, любопытная и добрая
 design:
   style: простые плоские формы, чёрный контур
-  body_color: "#F4A6C0"
-  accent_color: "#FFD166"
+  body_color: "#CDBBA7"
+  accent_color: "#E9A3A3"
   target_look: |
     Эталон (reference/target_look_duo.png): серо-бежевая пушистая зайчиха,
     длинные уши с розовой внутренней стороной, хохолок на макушке, большие
@@ -13,6 +13,13 @@ design:
     комбинезон с жёлтыми пуговицами. Стиль: мягкий 3D, мех, глубина
     резкости, тёплый лесной свет.
   # Ниже — временная упрощённая 2D-версия, она НЕ равна эталону.
+  belly_color: "#EADFCF"
+  outfit: overalls
+  outfit_color: "#3F66A8"
+  eye_color: "#2F6F9F"
+  nose_color: "#E58B96"
+  lashes: true
+  tuft: true
   ears: long   # long = длинные ушки, round = круглые
   height_px: 420
 parts: [body, head, eye_l, eye_r, arm_l, arm_r, leg_l, leg_r]

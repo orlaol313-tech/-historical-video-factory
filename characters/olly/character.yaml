@@ -4,14 +4,20 @@ id: olly
 role: друг Бонни, весёлый и неуклюжий
 design:
   style: простые плоские формы, чёрный контур
-  body_color: "#7FC8F8"
-  accent_color: "#EF476F"
+  body_color: "#D9902F"
+  accent_color: "#F2C27A"
   target_look: |
     Эталон (reference/target_look_duo.png): золотисто-коричневый пушистый
     медвежонок, круглые уши, большие карие глаза, тёмный носик, светлая
     мордочка и животик; зелёный капюшон со шнурками. Стиль: мягкий 3D, мех,
     глубина резкости, тёплый лесной свет.
   # Ниже — временная упрощённая 2D-версия, она НЕ равна эталону.
+  belly_color: "#F3D49C"
+  outfit: hood
+  outfit_color: "#4F7F3A"
+  eye_color: "#8A4B14"
+  nose_color: "#3B2418"
+  chubby: 1.3   # ширина тела (1.0 = обычное)
   ears: round   # long = длинные ушки, round = круглые
   height_px: 380
 parts: [body, head, eye_l, eye_r, arm_l, arm_r, leg_l, leg_r]

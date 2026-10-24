@@ -83,15 +83,27 @@ class Pen:
         self.d.rectangle(self._b(box), fill=fill)
 
 
+
+def _shade(img):
+    """Псевдо-объём: свет слева сверху, мягкая тень справа снизу (только на закрашенных пикселях)."""
+    a = np.asarray(img).astype(np.float32)
+    h, w = a.shape[:2]
+    yy, xx = np.mgrid[0:h, 0:w]
+    lum = 1.07 - 0.20 * (0.6 * xx / max(w - 1, 1) + 0.4 * yy / max(h - 1, 1))
+    a[:, :, :3] = np.clip(a[:, :, :3] * lum[:, :, None], 0, 255)
+    return Image.fromarray(a.astype(np.uint8), "RGBA")
+
 class Sprite:
     """Часть куклы. Картинка дополнена так, что точка вращения лежит в центре."""
 
-    def __init__(self, w, h, pivot, k, draw):
+    def __init__(self, w, h, pivot, k, draw, shade=True, sx=1.0):
         big = Image.new("RGBA", (w * SS, h * SS), (0, 0, 0, 0))
         draw(Pen(big, SS))
-        nw, nh = max(1, round(w * k)), max(1, round(h * k))
+        nw, nh = max(1, round(w * k * sx)), max(1, round(h * k))
         small = big.resize((nw, nh), Image.LANCZOS)
-        px, py = pivot[0] * k, pivot[1] * k
+        if shade:
+            small = _shade(small)
+        px, py = pivot[0] * k * sx, pivot[1] * k
         R = math.ceil(math.hypot(max(px, nw - px), max(py, nh - py))) + 3
         self.R = R
         self.img = Image.new("RGBA", (2 * R, 2 * R), (0, 0, 0, 0))
@@ -116,57 +128,101 @@ class Character:
         d = cdef["design"]
         self.id = cdef["id"]
         self.k = d["height_px"] / 420.0
-        body, accent = hexrgb(d["body_color"]), hexrgb(d["accent_color"])
+        fur = hexrgb(d["body_color"])
+        accent = hexrgb(d["accent_color"])
+        belly = hexrgb(d.get("belly_color", "#F3E6D3"))
+        cloth = hexrgb(d.get("outfit_color", "#3F66A8"))
+        eye = hexrgb(d.get("eye_color", "#5A3A1A"))
+        nose = hexrgb(d.get("nose_color", "#3B2418"))
+        outfit = d.get("outfit", "none")
         ears = d.get("ears", "round")
+        lashes = d.get("lashes", False)
+        tuft = d.get("tuft", False)
         k = self.k
+        WHITE = (255, 255, 255, 255)
+        YELLOW = (240, 200, 60, 255)
 
         def draw_body(p):
-            p.ellipse((10, 5, 160, 195), body)
-            p.ellipse((42, 70, 128, 172), tint(body, 0.55), ink=False)
-        self.body = Sprite(170, 200, (85, 185), k, draw_body)
+            p.ellipse((10, 5, 160, 195), fur)
+            p.ellipse((38, 62, 132, 175), belly, ink=False)
+            if outfit == "overalls":
+                p.rrect((18, 126, 152, 199), 16, cloth)
+                p.rrect((14, 184, 156, 202), 8, tint(cloth, 0.18))
+                p.rrect((46, 62, 124, 140), 12, cloth)
+                p.line([(52, 66), (40, 12)], w=9, color=cloth)
+                p.line([(118, 66), (130, 12)], w=9, color=cloth)
+                p.ellipse((51, 72, 67, 88), YELLOW, w=3)
+                p.ellipse((103, 72, 119, 88), YELLOW, w=3)
+                p.rrect((66, 104, 104, 128), 6, darker(cloth, 0.12), w=3)
+            elif outfit == "hood":
+                p.ellipse((22, 0, 148, 66), cloth)
+                p.line([(66, 52), (64, 106)], w=4, color=(200, 200, 205, 255))
+                p.line([(104, 52), (106, 100)], w=4, color=(200, 200, 205, 255))
+                p.ellipse((60, 102, 70, 114), (200, 200, 205, 255), w=3)
+                p.ellipse((101, 96, 111, 108), (200, 200, 205, 255), w=3)
+        self.sx = float(d.get("chubby", 1.0))
+        self.body = Sprite(170, 204, (85, 185), k, draw_body, sx=self.sx)
 
         def make_head(face):
             def draw(p):
+                if outfit == "hood":
+                    p.ellipse((12, 134, 208, 334), cloth)
                 if ears == "long":
-                    p.ellipse((48, 0, 98, 172), body)
-                    p.ellipse((122, 0, 172, 172), body)
-                    p.ellipse((62, 28, 86, 140), tint(accent, 0.3), ink=False)
-                    p.ellipse((136, 28, 160, 140), tint(accent, 0.3), ink=False)
+                    p.ellipse((48, 0, 98, 172), fur)
+                    p.ellipse((122, 0, 172, 172), fur)
+                    p.ellipse((60, 24, 88, 142), accent, ink=False)
+                    p.ellipse((134, 24, 162, 142), accent, ink=False)
                 else:
-                    p.ellipse((14, 126, 84, 196), body)
-                    p.ellipse((136, 126, 206, 196), body)
-                    p.ellipse((30, 142, 68, 180), tint(accent, 0.3), ink=False)
-                    p.ellipse((152, 142, 190, 180), tint(accent, 0.3), ink=False)
-                p.ellipse((25, 150, 195, 320), body)
-                p.ellipse((44, 252, 78, 276), (255, 150, 160, 255), ink=False)
-                p.ellipse((142, 252, 176, 276), (255, 150, 160, 255), ink=False)
-                if face == "normal":
-                    for ex in (63, 117):
-                        p.ellipse((ex, 198, ex + 42, 252), (255, 255, 255, 255), w=3)
-                        p.ellipse((ex + 16, 218, ex + 36, 246), INK, ink=False)
-                        p.ellipse((ex + 24, 222, ex + 31, 230), (255, 255, 255, 255), ink=False)
-                    p.arc((84, 252, 136, 292), 20, 160, w=5)
-                elif face == "laugh":
-                    for ex in (63, 117):
-                        p.arc((ex, 212, ex + 42, 252), 200, 340, w=6)
-                    p.chord((82, 250, 138, 304), 0, 180, (150, 40, 60, 255))
-                    p.ellipse((96, 280, 124, 298), (240, 120, 130, 255), ink=False)
-                else:  # "oh" — удивление
-                    for ex in (59, 113):
-                        p.ellipse((ex, 190, ex + 48, 254), (255, 255, 255, 255), w=3)
-                        p.ellipse((ex + 18, 214, ex + 32, 234), INK, ink=False)
-                    p.ellipse((98, 262, 122, 296), (150, 40, 60, 255), w=4)
+                    p.ellipse((12, 118, 88, 196), fur)
+                    p.ellipse((132, 118, 208, 196), fur)
+                    p.ellipse((30, 136, 70, 178), accent, ink=False)
+                    p.ellipse((150, 136, 190, 178), accent, ink=False)
+                if tuft:
+                    p.poly([(96, 150), (104, 108), (110, 146), (118, 104), (124, 150)], tint(fur, 0.25), w=3)
+                hh = (40, 160, 180, 312) if outfit == "hood" else (25, 150, 195, 320)
+                p.ellipse(hh, fur)
+                p.ellipse((70, 232, 150, 300), belly, ink=False)         # мордочка
+                p.ellipse((38, 246, 74, 274), (245, 150, 150, 255), ink=False)
+                p.ellipse((146, 246, 182, 274), (245, 150, 150, 255), ink=False)
+                if face in ("normal", "laugh"):
+                    pass
+                if face == "laugh":
+                    for ex in (60, 116):
+                        p.arc((ex, 208, ex + 46, 256), 200, 340, w=6)
+                    p.chord((82, 252, 138, 308), 0, 180, (150, 40, 60, 255))
+                    p.ellipse((96, 284, 124, 302), (240, 120, 130, 255), ink=False)
+                    p.ellipse((98, 240, 122, 258), nose, w=3)
+                else:
+                    big_ = 6 if face == "oh" else 0
+                    for ex in (58, 114):
+                        p.ellipse((ex - big_, 196 - big_, ex + 48 + big_, 262 + big_), WHITE, w=3)
+                        p.ellipse((ex + 6, 206, ex + 42, 252 + big_), eye, ink=False)
+                        p.ellipse((ex + 14, 214, ex + 36, 246 + big_), INK, ink=False)
+                        p.ellipse((ex + 20, 218, ex + 30, 230), WHITE, ink=False)
+                        p.ellipse((ex + 32, 238, ex + 37, 243), WHITE, ink=False)
+                        if lashes:
+                            p.line([(ex + 2, 206), (ex - 8, 196)], w=3)
+                            p.line([(ex + 14, 198), (ex + 10, 186)], w=3)
+                    p.ellipse((98, 240, 122, 258), nose, w=3)
+                    if face == "oh":
+                        p.ellipse((98, 268, 122, 298), (150, 40, 60, 255), w=4)
+                    else:
+                        p.arc((82, 252, 138, 292), 25, 155, w=5)
+                for ex in (56, 118):          # брови
+                    p.arc((ex + 2, 168, ex + 46, 196), 205, 335, w=3)
             return Sprite(220, 340, (110, 300), k, draw)
         self.heads = {f: make_head(f) for f in ("normal", "laugh", "oh")}
 
         def draw_arm(p):
-            p.rrect((2, 2, 34, 118), 16, body)
-            p.ellipse((0, 98, 36, 136), tint(body, 0.25))
+            p.rrect((2, 2, 34, 118), 16, fur)
+            p.ellipse((0, 98, 36, 136), tint(fur, 0.2))
         self.arm = Sprite(36, 140, (18, 20), k, draw_arm)
 
         def draw_leg(p):
-            p.rrect((14, 0, 58, 100), 12, accent)
-            p.ellipse((6, 90, 72, 128), darker(accent, 0.35))
+            p.rrect((14, 0, 58, 100), 12, fur)
+            p.ellipse((6, 90, 72, 128), tint(fur, 0.25))
+            p.ellipse((14, 104, 28, 118), accent, ink=False)
+            p.ellipse((34, 106, 48, 120), accent, ink=False)
         self.leg = Sprite(76, 132, (38, 15), k, draw_leg)
 
     def render(self, P):
@@ -175,15 +231,15 @@ class Character:
         cv = Image.new("RGBA", (CW, CH), (0, 0, 0, 0))
         gy = GY + P["dy"]
         hip = gy - 113 * k
-        self.leg.put(cv, (CX - 30 * k, hip), P["leg_l"])
-        self.leg.put(cv, (CX + 30 * k, hip), P["leg_r"])
+        self.leg.put(cv, (CX - 30 * k * self.sx, hip), P["leg_l"])
+        self.leg.put(cv, (CX + 30 * k * self.sx, hip), P["leg_r"])
         bp = (CX, hip + 8 * k)
         br = P["body_rot"]
         self.body.put(cv, bp, br)
         neck = rot((0, -170 * k), br)
         self.heads[P["face"]].put(cv, (bp[0] + neck[0], bp[1] + neck[1]), br + P["head_rot"])
         for side, key in ((-64, "arm_l"), (64, "arm_r")):
-            sh = rot((side * k, -140 * k), br)
+            sh = rot((side * k * self.sx, -140 * k), br)
             self.arm.put(cv, (bp[0] + sh[0], bp[1] + sh[1]), br + P[key])
         if abs(P["char_rot"]) > 0.05:
             cv = cv.rotate(P["char_rot"], resample=Image.BICUBIC, center=(CX, GY))
