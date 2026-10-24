@@ -6,8 +6,15 @@ design:
   style: простые плоские формы, чёрный контур
   body_color: "#7FC8F8"
   accent_color: "#EF476F"
+  target_look: |
+    Эталон (reference/target_look_duo.png): золотисто-коричневый пушистый
+    медвежонок, круглые уши, большие карие глаза, тёмный носик, светлая
+    мордочка и животик; зелёный капюшон со шнурками. Стиль: мягкий 3D, мех,
+    глубина резкости, тёплый лесной свет.
+  # Ниже — временная упрощённая 2D-версия, она НЕ равна эталону.
   ears: round   # long = длинные ушки, round = круглые
   height_px: 380
 parts: [body, head, eye_l, eye_r, arm_l, arm_r, leg_l, leg_r]
 animations: [idle, walk, jump, wave, laugh, trip]
-reference_images: []
+reference_images: [reference/target_look_duo.png]
+reference_source: изображение предоставлено пользователем; происхождение и лицензия не проверены, без решения пользователя не публиковать
