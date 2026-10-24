@@ -413,9 +413,25 @@ def make_audio(path):
     tt = np.arange(n) / SR
     saw = lambda f: 2 * ((tt * f) % 1) - 1
     drone = (saw(55.0) + saw(55.4) + 0.7 * saw(82.4) + 0.5 * saw(110.3) + 0.4 * saw(77.9))
-    drone = lowpass(drone, 380) * (0.55 + 0.45 * np.sin(tt * 0.5 + 1)) * 0.22
+    drone = lowpass(drone, 1400) * (0.55 + 0.45 * np.sin(tt * 0.5 + 1)) * 0.22
     pad = lowpass(rng.normal(0, 1, n), 900) * 0.10 * (0.5 + 0.5 * np.sin(tt * 0.31))
     mix = drone + pad
+    # audible mids/highs: dark minor-key pluck arpeggio + hats, so phones can hear it
+    notes = [220.0, 261.63, 329.63, 261.63, 196.0, 246.94, 293.66, 246.94]
+    step = 0.46
+    for i, tk in enumerate(np.arange(0.2, DUR - 1.0, step)):
+        f0 = notes[i % len(notes)] * (2 if (i // 8) % 2 else 1)
+        j = int(tk * SR)
+        m = min(int(0.9 * SR), n - j)
+        k = np.arange(m) / SR
+        pl = (np.sin(2 * math.pi * f0 * k) + 0.5 * np.sin(4 * math.pi * f0 * k)
+              + 0.25 * np.sin(6 * math.pi * f0 * k)) * np.exp(-k * 4.5)
+        mix[j:j + m] += pl * 0.11
+        if i % 2:
+            h = int(0.05 * SR)
+            hat = np.diff(rng.normal(0, 1, h + 1)) * np.exp(-np.arange(h) / (0.012 * SR))
+            mix[j:j + h] += hat * 0.10
+    mix += lowpass(rng.normal(0, 1, n), 6000) * 0.012
     # heartbeat
     for b in np.arange(0.5, DUR - 0.5, 0.92):
         for off, amp in ((0.0, 1.0), (0.2, 0.6)):
@@ -445,9 +461,11 @@ def make_audio(path):
         mix[i:i + m] += rng.normal(0, 1, m) * np.exp(-np.arange(m) / (0.008 * SR)) * 0.12
     mix *= np.minimum(1, tt / 0.3) * np.minimum(1, (DUR - tt) / 1.2)
     mix = np.tanh(mix * 1.6) * 0.8
-    pcm = (mix * 32767).astype("<i2")
+    d = int(0.012 * SR)
+    right = np.concatenate([np.zeros(d), mix[:-d]])
+    pcm = (np.stack([mix, right], 1) * 32767).astype("<i2")
     with wave.open(path, "wb") as w:
-        w.setnchannels(1)
+        w.setnchannels(2)
         w.setsampwidth(2)
         w.setframerate(SR)
         w.writeframes(pcm.tobytes())
