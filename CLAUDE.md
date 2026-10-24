@@ -20,7 +20,8 @@
 - reports/ — отчёты проверки и логи ошибок.
 
 ## Принципы сборки
-- Одна команда собирает серию из исходников: `python3 scripts/build_episode.py episodes/episode_001`.
+- Одна команда собирает серию из исходников: `python3 scripts/build_episode.py episodes/episode_001` (`--preview 6` — быстрая проба). Проверка файла: `python3 scripts/verify_video.py renders/episode_001.mp4`.
+- Метод: 2D-«кукольная» анимация (Pillow + numpy + ffmpeg); звук синтезируется кодом. Blender пока не используется.
 - Исходники (yaml, код) хранятся в git; рендеры воспроизводимы из них (фиксированный seed).
 - Персонажи не копируются в серии, а подключаются по имени из characters/.
 - Каждая сборка пишет лог в reports/ и итоговый отчёт (ok/fail + причины).

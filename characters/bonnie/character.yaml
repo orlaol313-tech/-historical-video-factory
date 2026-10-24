@@ -6,6 +6,7 @@ design:
   style: простые плоские формы, чёрный контур
   body_color: "#F4A6C0"
   accent_color: "#FFD166"
+  ears: long   # long = длинные ушки, round = круглые
   height_px: 420
 parts: [body, head, eye_l, eye_r, arm_l, arm_r, leg_l, leg_r]
 animations: [idle, walk, jump, wave, laugh]

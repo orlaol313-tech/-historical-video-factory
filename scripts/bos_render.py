@@ -1,0 +1,558 @@
+"""BonnieAndOllieStudio: движок 2D-«кукольной» анимации (только Pillow + numpy).
+
+Персонаж собирается из частей (тело, голова, руки, ноги). Каждый кадр части
+поворачиваются по формулам анимации и накладываются друг на друга.
+"""
+import math
+import random
+from bisect import bisect_right
+from pathlib import Path
+
+import numpy as np
+import yaml
+from PIL import Image, ImageDraw, ImageFont, ImageOps
+
+ROOT = Path(__file__).resolve().parent.parent
+BG_DIR = ROOT / "assets" / "backgrounds"
+FONT_BOLD = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+
+SS = 3                     # суперсэмплинг спрайтов (сглаживание краёв)
+INK = (43, 43, 43, 255)    # цвет контура
+CW, CH, CX, GY = 1000, 1250, 500, 1000   # холст персонажа и точка «земли» на нём
+BLEND = 0.2                # сек на плавный переход между анимациями
+
+
+def hexrgb(h, a=255):
+    h = h.lstrip("#")
+    return tuple(int(h[i:i + 2], 16) for i in (0, 2, 4)) + (a,)
+
+
+def tint(c, f):
+    return tuple(int(v + (255 - v) * f) for v in c[:3]) + (255,)
+
+
+def darker(c, f):
+    return tuple(int(v * (1 - f)) for v in c[:3]) + (255,)
+
+
+def lerp(a, b, s):
+    return a + (b - a) * s
+
+
+def smooth(u):
+    u = min(1.0, max(0.0, u))
+    return u * u * (3 - 2 * u)
+
+
+# --------------------------------------------------------------------- рисование
+class Pen:
+    """Рисует с увеличением в s раз; потом картинка уменьшается (гладкие края)."""
+
+    def __init__(self, img, s):
+        self.d = ImageDraw.Draw(img)
+        self.s = s
+
+    def _b(self, box):
+        return [v * self.s for v in box]
+
+    def ellipse(self, box, fill, ink=True, w=5):
+        self.d.ellipse(self._b(box), fill=fill, outline=INK if ink else None,
+                       width=w * self.s if ink else 0)
+
+    def rrect(self, box, r, fill, ink=True, w=5):
+        self.d.rounded_rectangle(self._b(box), radius=r * self.s, fill=fill,
+                                 outline=INK if ink else None, width=w * self.s if ink else 0)
+
+    def chord(self, box, a0, a1, fill, w=4):
+        self.d.chord(self._b(box), a0, a1, fill=fill, outline=INK, width=w * self.s)
+
+    def arc(self, box, a0, a1, w=5):
+        self.d.arc(self._b(box), a0, a1, fill=INK, width=w * self.s)
+
+    def poly(self, pts, fill, ink=True, w=5):
+        pts = [(x * self.s, y * self.s) for x, y in pts]
+        self.d.polygon(pts, fill=fill)
+        if ink:
+            self.d.line(pts + [pts[0]], fill=INK, width=w * self.s, joint="curve")
+
+    def line(self, pts, w=5, color=INK):
+        self.d.line([(x * self.s, y * self.s) for x, y in pts], fill=color,
+                    width=w * self.s, joint="curve")
+
+    def rect(self, box, fill):
+        self.d.rectangle(self._b(box), fill=fill)
+
+
+class Sprite:
+    """Часть куклы. Картинка дополнена так, что точка вращения лежит в центре."""
+
+    def __init__(self, w, h, pivot, k, draw):
+        big = Image.new("RGBA", (w * SS, h * SS), (0, 0, 0, 0))
+        draw(Pen(big, SS))
+        nw, nh = max(1, round(w * k)), max(1, round(h * k))
+        small = big.resize((nw, nh), Image.LANCZOS)
+        px, py = pivot[0] * k, pivot[1] * k
+        R = math.ceil(math.hypot(max(px, nw - px), max(py, nh - py))) + 3
+        self.R = R
+        self.img = Image.new("RGBA", (2 * R, 2 * R), (0, 0, 0, 0))
+        self.img.paste(small, (round(R - px), round(R - py)))
+
+    def put(self, canvas, xy, angle):
+        im = self.img.rotate(angle, resample=Image.BICUBIC) if abs(angle) > 0.05 else self.img
+        canvas.alpha_composite(im, (round(xy[0] - self.R), round(xy[1] - self.R)))
+
+
+def rot(v, deg):
+    """Повернуть вектор против часовой стрелки (в координатах картинки)."""
+    a = math.radians(deg)
+    return (v[0] * math.cos(a) + v[1] * math.sin(a), -v[0] * math.sin(a) + v[1] * math.cos(a))
+
+
+# ----------------------------------------------------------------------- персонаж
+class Character:
+    """Эталон персонажа. Строится из characters/<id>/character.yaml."""
+
+    def __init__(self, cdef):
+        d = cdef["design"]
+        self.id = cdef["id"]
+        self.k = d["height_px"] / 420.0
+        body, accent = hexrgb(d["body_color"]), hexrgb(d["accent_color"])
+        ears = d.get("ears", "round")
+        k = self.k
+
+        def draw_body(p):
+            p.ellipse((10, 5, 160, 195), body)
+            p.ellipse((42, 70, 128, 172), tint(body, 0.55), ink=False)
+        self.body = Sprite(170, 200, (85, 185), k, draw_body)
+
+        def make_head(face):
+            def draw(p):
+                if ears == "long":
+                    p.ellipse((48, 0, 98, 172), body)
+                    p.ellipse((122, 0, 172, 172), body)
+                    p.ellipse((62, 28, 86, 140), tint(accent, 0.3), ink=False)
+                    p.ellipse((136, 28, 160, 140), tint(accent, 0.3), ink=False)
+                else:
+                    p.ellipse((14, 126, 84, 196), body)
+                    p.ellipse((136, 126, 206, 196), body)
+                    p.ellipse((30, 142, 68, 180), tint(accent, 0.3), ink=False)
+                    p.ellipse((152, 142, 190, 180), tint(accent, 0.3), ink=False)
+                p.ellipse((25, 150, 195, 320), body)
+                p.ellipse((44, 252, 78, 276), (255, 150, 160, 255), ink=False)
+                p.ellipse((142, 252, 176, 276), (255, 150, 160, 255), ink=False)
+                if face == "normal":
+                    for ex in (63, 117):
+                        p.ellipse((ex, 198, ex + 42, 252), (255, 255, 255, 255), w=3)
+                        p.ellipse((ex + 16, 218, ex + 36, 246), INK, ink=False)
+                        p.ellipse((ex + 24, 222, ex + 31, 230), (255, 255, 255, 255), ink=False)
+                    p.arc((84, 252, 136, 292), 20, 160, w=5)
+                elif face == "laugh":
+                    for ex in (63, 117):
+                        p.arc((ex, 212, ex + 42, 252), 200, 340, w=6)
+                    p.chord((82, 250, 138, 304), 0, 180, (150, 40, 60, 255))
+                    p.ellipse((96, 280, 124, 298), (240, 120, 130, 255), ink=False)
+                else:  # "oh" — удивление
+                    for ex in (59, 113):
+                        p.ellipse((ex, 190, ex + 48, 254), (255, 255, 255, 255), w=3)
+                        p.ellipse((ex + 18, 214, ex + 32, 234), INK, ink=False)
+                    p.ellipse((98, 262, 122, 296), (150, 40, 60, 255), w=4)
+            return Sprite(220, 340, (110, 300), k, draw)
+        self.heads = {f: make_head(f) for f in ("normal", "laugh", "oh")}
+
+        def draw_arm(p):
+            p.rrect((2, 2, 34, 118), 16, body)
+            p.ellipse((0, 98, 36, 136), tint(body, 0.25))
+        self.arm = Sprite(36, 140, (18, 20), k, draw_arm)
+
+        def draw_leg(p):
+            p.rrect((14, 0, 58, 100), 12, accent)
+            p.ellipse((6, 90, 72, 128), darker(accent, 0.35))
+        self.leg = Sprite(76, 132, (38, 15), k, draw_leg)
+
+    def render(self, P):
+        """Собрать позу P (словарь углов) на холст CW x CH."""
+        k = self.k
+        cv = Image.new("RGBA", (CW, CH), (0, 0, 0, 0))
+        gy = GY + P["dy"]
+        hip = gy - 113 * k
+        self.leg.put(cv, (CX - 30 * k, hip), P["leg_l"])
+        self.leg.put(cv, (CX + 30 * k, hip), P["leg_r"])
+        bp = (CX, hip + 8 * k)
+        br = P["body_rot"]
+        self.body.put(cv, bp, br)
+        neck = rot((0, -170 * k), br)
+        self.heads[P["face"]].put(cv, (bp[0] + neck[0], bp[1] + neck[1]), br + P["head_rot"])
+        for side, key in ((-64, "arm_l"), (64, "arm_r")):
+            sh = rot((side * k, -140 * k), br)
+            self.arm.put(cv, (bp[0] + sh[0], bp[1] + sh[1]), br + P[key])
+        if abs(P["char_rot"]) > 0.05:
+            cv = cv.rotate(P["char_rot"], resample=Image.BICUBIC, center=(CX, GY))
+        return cv
+
+
+# ----------------------------------------------------------------------- анимации
+POSE0 = dict(dy=0.0, lift=0.0, char_rot=0.0, body_rot=0.0, head_rot=0.0,
+             arm_l=0.0, arm_r=0.0, leg_l=0.0, leg_r=0.0, face="normal")
+W = 2 * math.pi
+
+
+def pose(anim, t, u):
+    """Поза персонажа в момент t (сек). u — прогресс отрезка 0..1."""
+    P = dict(POSE0)
+    sn = math.sin
+    if anim == "walk":
+        s = sn(t * W * 1.3)
+        P.update(leg_l=32 * s, leg_r=-32 * s, arm_l=-28 * s, arm_r=28 * s,
+                 dy=-abs(s) * 7, body_rot=2 * s, head_rot=-1.5 * s)
+    elif anim == "run":
+        s = sn(t * W * 2.0)
+        P.update(leg_l=52 * s, leg_r=-52 * s, arm_l=-62 * s, arm_r=62 * s,
+                 dy=-abs(s) * 18, char_rot=-7, head_rot=2 * s, face="laugh")
+    elif anim == "jump":
+        s = abs(sn(t * W * 0.55))
+        P.update(dy=-150 * s, leg_l=14 * (1 - s) + 6, leg_r=-14 * (1 - s) - 6,
+                 arm_l=-150, arm_r=150, face="laugh")
+    elif anim == "wave":
+        s = sn(t * W * 2.2)
+        P.update(arm_r=150 + 22 * s, arm_l=4, head_rot=3 * s, dy=-abs(sn(t * W * 1.1)) * 3)
+    elif anim == "laugh":
+        s = sn(t * W * 3)
+        P.update(dy=-abs(s) * 14, head_rot=6 * s, body_rot=3 * s, arm_l=22, arm_r=-22, face="laugh")
+    elif anim == "surprise":
+        P.update(arm_l=-55 + 3 * sn(t * W * 6), arm_r=55 - 3 * sn(t * W * 6),
+                 head_rot=-4, dy=-6, face="oh")
+    elif anim == "point":
+        P.update(arm_r=105 + 3 * sn(t * W * 2), arm_l=3, head_rot=-5, body_rot=-3)
+    elif anim == "trip":
+        a = smooth(u / 0.28)
+        b = smooth((u - 0.72) / 0.28)
+        fall = a * (1 - b)
+        P.update(char_rot=-88 * fall, lift=-55 * fall, arm_l=-120 * fall, arm_r=120 * fall,
+                 leg_l=20 * fall, leg_r=-20 * fall, face="oh" if u < 0.72 else "laugh")
+    else:  # idle
+        s = sn(t * W * 0.5)
+        P.update(dy=-abs(s) * 3, arm_l=-4 + 3 * s, arm_r=4 - 3 * s, head_rot=2 * s)
+    return P
+
+
+def mix_pose(a, b, k):
+    out = {key: lerp(a[key], b[key], k) for key in a if key != "face"}
+    out["face"] = b["face"]
+    return out
+
+
+# ------------------------------------------------------------------------- фоны
+def vgrad(w, h, stops):
+    """Вертикальный градиент. stops: [(позиция 0..1, (r,g,b)), ...]."""
+    ys = np.linspace(0, 1, h)
+    pos = [s[0] for s in stops]
+    arr = np.zeros((h, w, 3), np.uint8)
+    for c in range(3):
+        col = np.interp(ys, pos, [s[1][c] for s in stops])
+        arr[:, :, c] = col[:, None]
+    return Image.fromarray(arr, "RGB")
+
+
+def _cloud(p, x, y, sc, color):
+    for dx, dy, r in ((0, 0, 60), (55, -22, 70), (115, 0, 60), (60, 18, 62)):
+        p.ellipse((x + (dx - r) * sc, y + (dy - r * 0.6) * sc,
+                   x + (dx + r) * sc, y + (dy + r * 0.6) * sc), color, ink=False)
+
+
+def _tree(p, x, base, h, trunk, leaf):
+    p.rrect((x - h * 0.06, base - h * 0.55, x + h * 0.06, base), 10, trunk, ink=False)
+    for dx, dy, r in ((0, -0.7, 0.28), (-0.2, -0.55, 0.22), (0.2, -0.55, 0.22), (0, -0.5, 0.26)):
+        p.ellipse((x + (dx - r) * h, base + (dy - r) * h, x + (dx + r) * h, base + (dy + r) * h),
+                  leaf, ink=False)
+
+
+def bg_yard(f=2):
+    W_, H_ = 1920 * f, 1080 * f
+    img = vgrad(W_, H_, [(0, (120, 200, 250)), (0.62, (215, 240, 255)), (0.62, (110, 190, 80)), (1, (66, 140, 58))])
+    p = Pen(img, f)
+    rng = random.Random(11)
+    p.ellipse((1560, 70, 1740, 250), (255, 235, 120, 255), ink=False)
+    for cx, cy, sc in ((300, 150, 1.0), (900, 230, 1.3), (1450, 330, 0.9)):
+        _cloud(p, cx, cy, sc, (255, 255, 255, 255))
+    p.ellipse((-300, 520, 900, 900), (150, 205, 125, 255), ink=False)
+    p.ellipse((650, 560, 2150, 980), (125, 190, 108, 255), ink=False)
+    img2 = vgrad(W_, H_ // 3 + 2, [(0, (108, 188, 78)), (1, (62, 136, 56))])
+    img.paste(img2, (0, int(740 * f)))
+    p = Pen(img, f)
+    # дом
+    p.rect((90, 430, 560, 780), (250, 232, 196, 255))
+    p.poly([(55, 436), (325, 250), (595, 436)], (190, 80, 70, 255))
+    p.rrect((270, 600, 370, 780), 8, (140, 90, 60, 255), w=4)
+    for wx in (140, 430):
+        p.rrect((wx, 500, wx + 100, 600), 6, (170, 220, 245, 255), w=4)
+        p.line([(wx + 50, 500), (wx + 50, 600)], w=4)
+        p.line([(wx, 550), (wx + 100, 550)], w=4)
+    # дерево справа
+    _tree(p, 1760, 800, 560, (130, 90, 55, 255), (70, 160, 70, 255))
+    # забор
+    for x in range(640, 1700, 74):
+        p.rrect((x, 700, x + 42, 835), 8, (255, 255, 255, 255), w=3)
+    p.rect((620, 735, 1700, 755), (240, 240, 240, 255))
+    p.rect((620, 790, 1700, 810), (240, 240, 240, 255))
+    # дорожка и цветы
+    p.poly([(0, 960), (1920, 930), (1920, 1010), (0, 1060)], (226, 205, 150, 255), ink=False)
+    for _ in range(90):
+        x, y = rng.randint(0, 1900), rng.randint(790, 1070)
+        col = rng.choice([(255, 90, 120), (255, 220, 70), (255, 255, 255), (170, 120, 240)])
+        r = rng.randint(5, 9)
+        p.ellipse((x - r, y - r, x + r, y + r), col + (255,), ink=False)
+    return img.resize((1920, 1080), Image.LANCZOS)
+
+
+def bg_park(f=2):
+    W_, H_ = 1920 * f, 1080 * f
+    img = vgrad(W_, H_, [(0, (150, 210, 250)), (0.6, (235, 245, 255)), (0.6, (96, 176, 84)), (1, (58, 126, 60))])
+    p = Pen(img, f)
+    rng = random.Random(23)
+    for cx, cy, sc in ((250, 130, 1.1), (1050, 190, 0.9), (1600, 100, 1.2)):
+        _cloud(p, cx, cy, sc, (255, 255, 255, 255))
+    p.ellipse((-200, 480, 1100, 900), (128, 190, 112, 255), ink=False)
+    p.ellipse((800, 520, 2300, 930), (108, 172, 98, 255), ink=False)
+    img2 = vgrad(W_, H_ // 3 + 2, [(0, (92, 172, 80)), (1, (58, 126, 60))])
+    img.paste(img2, (0, int(720 * f)))
+    p = Pen(img, f)
+    # пруд
+    p.ellipse((520, 760, 1180, 880), (120, 190, 235, 255), w=4)
+    p.ellipse((600, 790, 780, 830), (190, 230, 255, 255), ink=False)
+    # деревья
+    for x, h in ((140, 640), (470, 520), (1450, 600), (1810, 700)):
+        _tree(p, x, 770, h, (126, 88, 56, 255), (58, 150, 66, 255))
+    # скамейка
+    p.rrect((1050, 680, 1330, 710), 6, (150, 100, 60, 255), w=4)
+    p.rrect((1050, 725, 1330, 755), 6, (150, 100, 60, 255), w=4)
+    for lx in (1070, 1300):
+        p.rect((lx, 750, lx + 16, 810), (80, 55, 40, 255))
+    # дорожка
+    p.poly([(0, 950), (1920, 920), (1920, 1020), (0, 1070)], (230, 212, 160, 255), ink=False)
+    for _ in range(120):
+        x, y = rng.randint(0, 1900), rng.randint(780, 1070)
+        col = rng.choice([(255, 90, 120), (255, 220, 70), (255, 255, 255)])
+        r = rng.randint(4, 8)
+        p.ellipse((x - r, y - r, x + r, y + r), col + (255,), ink=False)
+    return img.resize((1920, 1080), Image.LANCZOS)
+
+
+def bg_sky(f=2):
+    W_, H_ = 1920 * f, 1080 * f
+    img = vgrad(W_, H_, [(0, (36, 48, 112)), (0.35, (110, 90, 160)), (0.6, (245, 150, 120)), (0.74, (255, 205, 130)), (0.74, (52, 110, 92)), (1, (34, 78, 70))])
+    p = Pen(img, f)
+    rng = random.Random(5)
+    for _ in range(70):
+        x, y, r = rng.randint(0, 1920), rng.randint(0, 420), rng.choice([2, 2, 3, 4])
+        p.ellipse((x - r, y - r, x + r, y + r), (255, 250, 220, 255), ink=False)
+    p.ellipse((420, 620, 780, 980), (255, 240, 170, 255), ink=False)
+    for cx, cy, sc in ((300, 380, 1.4), (1100, 300, 1.0), (1600, 480, 1.2)):
+        _cloud(p, cx, cy, sc, (255, 190, 170, 255))
+    p.poly([(0, 800), (260, 600), (560, 790), (900, 560), (1300, 800), (1600, 640), (1920, 800), (1920, 840), (0, 840)],
+           (84, 80, 130, 255), ink=False)
+    p.ellipse((-400, 830, 2320, 1700), (52, 112, 94, 255), ink=False)
+    for _ in range(110):
+        x, y = rng.randint(0, 1900), rng.randint(880, 1070)
+        p.line([(x, y), (x - 6, y - 22)], w=3, color=(90, 160, 120, 255))
+        p.line([(x, y), (x + 6, y - 20)], w=3, color=(90, 160, 120, 255))
+    return img.resize((1920, 1080), Image.LANCZOS)
+
+
+BG_MAKERS = {"yard": bg_yard, "park": bg_park, "sky": bg_sky}
+
+
+def ensure_backgrounds(names):
+    BG_DIR.mkdir(parents=True, exist_ok=True)
+    out = {}
+    for n in set(names):
+        path = BG_DIR / f"{n}.png"
+        if not path.exists():
+            BG_MAKERS[n]().save(path)
+        out[n] = Image.open(path).convert("RGB")
+    return out
+
+
+# ---------------------------------------------------------------------- рендерер
+def make_balloon(color):
+    def draw(p):
+        p.ellipse((10, 8, 110, 138), color)
+        p.ellipse((30, 24, 52, 58), tint(color, 0.55), ink=False)
+        p.poly([(52, 138), (68, 138), (60, 154)], darker(color, 0.15), w=4)
+    return Sprite(120, 160, (60, 73), 1.0, draw)
+
+
+class Renderer:
+    def __init__(self, ep_dir, preview=None):
+        ep_dir = Path(ep_dir)
+        self.ep = yaml.safe_load((ep_dir / "episode.yaml").read_text(encoding="utf-8"))
+        fmt = self.ep["format"]
+        self.w, self.h, self.fps = fmt["width"], fmt["height"], fmt["fps"]
+        self.duration = float(preview or fmt["duration_sec"])
+        self.n_frames = int(round(self.duration * self.fps))
+        self.ground = self.ep["stage"]["ground_y"]
+        self.scenes = self.ep["scenes"]
+        self.bgs = ensure_backgrounds([s["bg"] for s in self.scenes])
+        self.chars = {}
+        for cid in self.ep["characters"]:
+            cdef = yaml.safe_load((ROOT / "characters" / cid / "character.yaml").read_text(encoding="utf-8"))
+            self.chars[cid] = Character(cdef)
+        self.tracks = {a: sorted(kfs, key=lambda k: k["t"]) for a, kfs in self.ep["actors"].items()}
+        self.faces = {a: self._faces(kfs) for a, kfs in self.tracks.items()}
+        self.props = {}
+        for name, pdef in self.ep.get("props", {}).items():
+            self.props[name] = dict(pdef, track=sorted(pdef["track"], key=lambda k: k["t"]),
+                                    sprite=make_balloon(hexrgb(pdef["color"])))
+        sh = Image.new("RGBA", (300, 60), (0, 0, 0, 0))
+        ImageDraw.Draw(sh).ellipse((0, 0, 299, 59), fill=(0, 0, 0, 70))
+        self.shadow = sh
+        self._overlay_cache = {}
+
+    # --- состояния
+    @staticmethod
+    def _faces(kfs):
+        out, cur = [], 1
+        for i, k in enumerate(kfs):
+            dx = (kfs[i + 1]["x"] - k["x"]) if i + 1 < len(kfs) else 0
+            if dx:
+                cur = 1 if dx > 0 else -1
+            elif "face" in k:
+                cur = k["face"]
+            out.append(cur)
+        return out
+
+    def actor_state(self, aid, t):
+        kfs, faces = self.tracks[aid], self.faces[aid]
+        ts = [k["t"] for k in kfs]
+        i = max(0, bisect_right(ts, t) - 1)
+        k0 = kfs[i]
+        if t <= ts[0] or i == len(kfs) - 1:
+            x, u = k0["x"], 1.0
+        else:
+            k1 = kfs[i + 1]
+            u = (t - k0["t"]) / (k1["t"] - k0["t"])
+            x = lerp(k0["x"], k1["x"], smooth(u) if k0.get("ease") == "smooth" else u)
+        return dict(x=x, face=faces[i], anim=k0.get("anim", "idle"), u=u,
+                    tau=max(0.0, t - k0["t"]),
+                    prev=kfs[i - 1].get("anim", "idle") if i > 0 else None)
+
+    def actor_pose(self, st, t):
+        P = pose(st["anim"], t, st["u"])
+        if st["prev"] and st["tau"] < BLEND:
+            P = mix_pose(pose(st["prev"], t, 1.0), P, st["tau"] / BLEND)
+        return P
+
+    def prop_state(self, name, t):
+        kfs = self.props[name]["track"]
+        ts = [k["t"] for k in kfs]
+        i = max(0, bisect_right(ts, t) - 1)
+
+        def at(kf):
+            sc = kf.get("scale", 1.0)
+            if "attach" in kf:
+                st = self.actor_state(kf["attach"], t)
+                k = self.chars[kf["attach"]].k
+                f = st["face"]
+                hand = (st["x"] + 70 * f * k, self.ground - 190 * k)
+                return (hand[0] + 20 * f, hand[1] - 240), hand, sc
+            return (kf["x"], kf["y"]), None, sc
+
+        p0, e0, s0 = at(kfs[i])
+        if t <= ts[0] or i == len(kfs) - 1:
+            pos, sc, s, e1 = p0, s0, 0.0, None
+            p1 = None
+        else:
+            p1, e1, s1 = at(kfs[i + 1])
+            s = (t - ts[i]) / (ts[i + 1] - ts[i])
+            pos = (lerp(p0[0], p1[0], s), lerp(p0[1], p1[1], s))
+            sc = lerp(s0, s1, s)
+        sway = math.sin(t * 2.1) * 14
+        bob = math.sin(t * 3.0) * 4
+        pos = (pos[0], pos[1] + bob)
+        free = (pos[0] + sway, pos[1] + (65 + 170) * sc)
+        end0 = e0 or free
+        end = end0 if p1 is None else (lerp(end0[0], (e1 or free)[0], s), lerp(end0[1], (e1 or free)[1], s))
+        return pos, end, sc
+
+    # --- кадр
+    def background(self, t):
+        cur = max(i for i, sc in enumerate(self.scenes) if sc["t"][0] <= t + 1e-9)
+        img = self.bgs[self.scenes[cur]["bg"]]
+        for i in range(1, len(self.scenes)):
+            b = self.scenes[i]["t"][0]
+            if abs(t - b) < 0.25:
+                a, c = self.bgs[self.scenes[i - 1]["bg"]], self.bgs[self.scenes[i]["bg"]]
+                if a is not c:
+                    return Image.blend(a, c, (t - b + 0.25) / 0.5)
+        return img.copy()
+
+    def _text_overlay(self, key, lines):
+        if key not in self._overlay_cache:
+            ov = Image.new("RGBA", (self.w, self.h), (0, 0, 0, 0))
+            d = ImageDraw.Draw(ov)
+            fonts = [ImageFont.truetype(FONT_BOLD, s) for s, _ in lines]
+            tot = sum(f.size * 1.3 for f in fonts)
+            wmax = max(d.textlength(txt, font=f) for f, (_, txt) in zip(fonts, lines))
+            x0, y0 = (self.w - wmax) / 2 - 60, (self.h - tot) / 2 - 40
+            d.rounded_rectangle((x0, y0, x0 + wmax + 120, y0 + tot + 60), 40, fill=(20, 24, 50, 150))
+            y = y0 + 30
+            for f, (_, txt) in zip(fonts, lines):
+                d.text((self.w / 2 - d.textlength(txt, font=f) / 2, y), txt, font=f, fill=(255, 255, 255, 255))
+                y += f.size * 1.3
+            self._overlay_cache[key] = ov
+        return self._overlay_cache[key]
+
+    def frame(self, i):
+        t = i / self.fps
+        img = self.background(t)
+        states = {a: self.actor_state(a, t) for a in self.tracks}
+        # тени
+        for a, st in states.items():
+            P = self.actor_pose(st, t)
+            k = self.chars[a].k
+            sc = max(0.4, 1 + P["dy"] / 500.0)
+            sh = self.shadow.resize((int(300 * k * sc), int(56 * k * sc)))
+            img.paste(sh, (round(st["x"] - sh.width / 2), round(self.ground - sh.height / 2 + 4)), sh)
+        # персонажи
+        for a, st in states.items():
+            P = self.actor_pose(st, t)
+            cv = self.chars[a].render(P)
+            if st["face"] < 0:
+                cv = ImageOps.mirror(cv)
+            img.paste(cv, (round(st["x"] - CX), round(self.ground - GY + P["lift"])), cv)
+        # шарик
+        d = ImageDraw.Draw(img)
+        for name, pr in self.props.items():
+            if t < pr["track"][0]["t"] - 1e-9:
+                continue
+            pos, end, sc = self.prop_state(name, t)
+            start = (pos[0], pos[1] + 66 * sc)
+            mid = ((start[0] + end[0]) / 2 + 10 * math.sin(t * 3), (start[1] + end[1]) / 2)
+            pts = [((1 - u) ** 2 * start[0] + 2 * u * (1 - u) * mid[0] + u * u * end[0],
+                    (1 - u) ** 2 * start[1] + 2 * u * (1 - u) * mid[1] + u * u * end[1])
+                   for u in np.linspace(0, 1, 14)]
+            d.line(pts, fill=(70, 70, 70), width=max(2, round(3 * sc)))
+            spr = pr["sprite"].img
+            if abs(sc - 1) > 0.01:
+                spr = spr.resize((max(1, round(spr.width * sc)), max(1, round(spr.height * sc))), Image.LANCZOS)
+            img.paste(spr, (round(pos[0] - spr.width / 2), round(pos[1] - spr.height / 2)), spr)
+        # титры
+        for ov in self.ep.get("overlays", []):
+            a, b = ov["t"]
+            if a <= t <= b:
+                alpha = min(1.0, (t - a) / 0.5, (b - t) / 0.5)
+                layer = self._text_overlay(ov["id"], [(l["size"], l["text"]) for l in ov["lines"]])
+                if alpha < 1:
+                    layer = layer.copy()
+                    layer.putalpha(layer.getchannel("A").point(lambda v: int(v * alpha)))
+                img.paste(layer, (0, 0), layer)
+        fade = self.ep.get("fade_out")
+        if fade and t >= fade[0]:
+            k = min(1.0, (t - fade[0]) / (fade[1] - fade[0]))
+            img = Image.blend(img, Image.new("RGB", img.size, (0, 0, 0)), k)
+            end_ov = self.ep.get("end_card")
+            if end_ov and k > 0.55:
+                layer = self._text_overlay("end", [(l["size"], l["text"]) for l in end_ov])
+                layer = layer.copy()
+                layer.putalpha(layer.getchannel("A").point(lambda v: int(v * min(1.0, (k - 0.55) / 0.3))))
+                img.paste(layer, (0, 0), layer)
+        return img

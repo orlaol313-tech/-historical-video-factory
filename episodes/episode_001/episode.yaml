@@ -1,11 +1,111 @@
 id: episode_001
 title: Шарик
 format: {width: 1920, height: 1080, fps: 24, duration_sec: 60}
-characters: [bonnie, olly]   # берутся из characters/
+stage: {ground_y: 900}
+characters: [bonnie, olly]   # берутся из characters/, здесь не копируются
 seed: 1
-audio: {music: synth, sfx: synth, voice: none}
+
+# Сцены: фон меняется с плавным переходом на границе.
 scenes:
-  - {id: s1, t: [0, 12],  bg: yard,  action: "Бонни и Оли встречаются во дворе"}
-  - {id: s2, t: [12, 27], bg: yard,  action: "Бонни находит красный шарик"}
-  - {id: s3, t: [27, 45], bg: park,  action: "Оли гонится за шариком, спотыкается"}
-  - {id: s4, t: [45, 60], bg: sky,   action: "Шарик улетает, друзья машут и смеются"}
+  - {id: s1, t: [0, 12],  bg: yard, action: "Бонни и Оли встречаются во дворе"}
+  - {id: s2, t: [12, 27], bg: yard, action: "Бонни находит красный шарик"}
+  - {id: s3, t: [27, 45], bg: park, action: "Оли гонится за шариком и спотыкается"}
+  - {id: s4, t: [45, 60], bg: sky,  action: "Шарик улетает, друзья машут и смеются"}
+
+# Движение: ключевые кадры. Между кадрами персонаж плавно идёт из x в x,
+# а анимация (anim) действует до следующего ключевого кадра.
+# anim: idle walk run jump wave laugh surprise point trip
+actors:
+  bonnie:
+    - {t: 0,    x: -250, anim: walk}
+    - {t: 4.5,  x: 650,  anim: wave}
+    - {t: 8,    x: 650,  anim: laugh}
+    - {t: 12,   x: 650,  anim: surprise}
+    - {t: 14,   x: 650,  anim: point}
+    - {t: 17,   x: 650,  anim: walk}
+    - {t: 19.5, x: 1000, anim: jump}
+    - {t: 21.5, x: 1000, anim: laugh}
+    - {t: 24,   x: 1000, anim: idle}
+    - {t: 27,   x: 1000, anim: walk}
+    - {t: 28.5, x: 1180, anim: idle}
+    - {t: 29.8, x: 1180, anim: wave}
+    - {t: 32.5, x: 1180, anim: surprise}
+    - {t: 33.5, x: 1180, anim: point}
+    - {t: 35.5, x: 1180, anim: jump}
+    - {t: 37.5, x: 1180, anim: idle}
+    - {t: 38.5, x: 1180, anim: laugh}
+    - {t: 44,   x: 1180, anim: laugh}
+    - {t: 47,   x: 1180, anim: wave, face: 1}
+    - {t: 55,   x: 1180, anim: laugh}
+    - {t: 58,   x: 1180, anim: idle}
+  olly:
+    - {t: 1,    x: 2200, anim: walk}
+    - {t: 5.5,  x: 1350, anim: wave}
+    - {t: 8,    x: 1350, anim: laugh}
+    - {t: 12,   x: 1350, anim: surprise}
+    - {t: 14,   x: 1350, anim: idle, face: -1}
+    - {t: 21.5, x: 1350, anim: jump}
+    - {t: 24,   x: 1350, anim: idle}
+    - {t: 31.5, x: 1350, anim: idle}
+    - {t: 33,   x: 1350, anim: surprise}
+    - {t: 34,   x: 1350, anim: run}
+    - {t: 35,   x: 1450, anim: jump}
+    - {t: 38.5, x: 1450, anim: trip}
+    - {t: 41.5, x: 1450, anim: idle}
+    - {t: 42,   x: 1450, anim: laugh}
+    - {t: 47,   x: 1450, anim: wave, face: 1}
+    - {t: 55,   x: 1450, anim: laugh}
+    - {t: 58,   x: 1450, anim: idle}
+
+# Шарик: свободные кадры (x, y — центр шарика) или attach — в руке персонажа.
+props:
+  balloon:
+    kind: balloon
+    color: "#E63946"
+    track:
+      - {t: 12,   x: 1900, y: -150}
+      - {t: 17,   x: 1100, y: 330}
+      - {t: 20,   x: 1000, y: 430}
+      - {t: 21.5, attach: bonnie}
+      - {t: 29,   attach: bonnie}
+      - {t: 29.8, attach: olly}
+      - {t: 31.5, attach: olly}
+      - {t: 33,   x: 1520, y: 150}
+      - {t: 38,   x: 1650, y: 170}
+      - {t: 45,   x: 1560, y: 260, scale: 0.85}
+      - {t: 60,   x: 1800, y: -200, scale: 0.35}
+
+# Звуковые эффекты: [время в секундах, вид]. Создаются кодом (scripts/bos_audio.py).
+sfx:
+  - [5.6, chime]
+  - [9.0, giggle]
+  - [12.0, gasp]
+  - [12.5, whoosh]
+  - [19.8, boing]
+  - [20.9, boing]
+  - [21.5, ding]
+  - [22.0, giggle]
+  - [21.8, boing]
+  - [29.8, chime]
+  - [32.6, whoosh]
+  - [33.0, gasp]
+  - [36.7, boing]
+  - [38.6, slide]
+  - [39.5, thud]
+  - [39.8, giggle]
+  - [44.0, giggle]
+  - [47.0, chime]
+  - [56.5, ding]
+
+music: {bpm: 100, key: C}
+
+overlays:
+  - id: title
+    t: [0.3, 3.6]
+    lines:
+      - {size: 110, text: "Бонни и Оли"}
+      - {size: 58,  text: "Серия 1 · Шарик"}
+
+fade_out: [56.8, 59.8]
+end_card:
+  - {size: 90, text: "Конец серии 1"}
