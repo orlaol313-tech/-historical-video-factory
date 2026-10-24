@@ -19,6 +19,11 @@
 - renders/ — готовые MP4 (не в git, пересобираются).
 - reports/ — отчёты проверки и логи ошибок.
 
+## Основной способ производства (выбран пользователем)
+- Claude пишет сценарий и промпты (`episodes/*/ai_workflow/`), пользователь генерирует клипы в бесплатных нейросетях, Claude собирает: `python3 scripts/assemble_ai_clips.py episodes/episode_001 --music --title --fit crop`.
+- Целевая графика: мягкий 3D «как в полнометражной анимации» (эталоны в characters/*/reference). Локальный Blender/2D — запасные варианты, не основной.
+- Нейросети Claude не запускает; про их бесплатные лимиты не утверждать без проверки.
+
 ## Принципы сборки
 - Одна команда собирает серию из исходников: `python3 scripts/build_episode.py episodes/episode_001` (`--preview 6` — быстрая проба). Проверка файла: `python3 scripts/verify_video.py renders/episode_001.mp4`.
 - Метод: 2D-«кукольная» анимация (Pillow + numpy + ffmpeg); звук синтезируется кодом. Blender пока не используется.

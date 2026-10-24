@@ -1,5 +1,20 @@
 # BonnieAndOllieStudio
 
+## Основной способ: сценарий (Claude) + клипы из бесплатных нейросетей (вы) + сборка (Claude)
+
+1. Читаете `episodes/episode_001/ai_workflow/00_КАК_РАБОТАТЬ.md`.
+2. Генерируете 4 клипа по 15 с по промптам из `02_ПРОМПТЫ.md`, кладёте в `episodes/episode_001/ai_clips/` (`clip_01.mp4` …).
+3. Собираете серию (музыка, титры, затухание, проверка):
+   ```bash
+   python3 scripts/assemble_ai_clips.py episodes/episode_001 --music --title --fit crop
+   ```
+   Готовое видео: `renders/episode_001_ai.mp4`, отчёт: `reports/latest_report.md`.
+   Последний кадр клипа (для старта следующего): `python3 scripts/clip_tools.py lastframe clip_01.mp4 start_02.png`.
+
+Остальное в этом файле — запасные локальные способы (2D и 3D в Blender), они не нужны для основного способа.
+
+---
+
 Бесплатная локальная студия мультсериала «Бонни и Оли». Платные API, подписки и кредиты не нужны.
 
 ## Как получить мультфильм (одна команда)
