@@ -1,0 +1,12 @@
+renders/*
+!renders/.gitkeep
+__pycache__/
+*.pyc
+.env
+*.key
+episodes/*/build/
+reports/build_log_*
+reports/report_*
+episodes/*/build3d/
+reports/blender_log_*
+episodes/*/ai_clips/*.mp4
